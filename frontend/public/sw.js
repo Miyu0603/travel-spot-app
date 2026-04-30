@@ -1,5 +1,5 @@
-const CACHE_NAME = "travelspot-v1";
-const PRECACHE_URLS = ["/", "/icon_180.png"];
+const CACHE_NAME = "travelspot-v2";
+const PRECACHE_URLS = ["/travel-spot-app/", "/travel-spot-app/icon_180.png"];
 
 self.addEventListener("install", (event) => {
     event.waitUntil(
