@@ -1,5 +1,18 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
+export function getApiKey(): string {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("api_key") || "";
+}
+
+export function setApiKey(key: string) {
+    localStorage.setItem("api_key", key);
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+    return { "X-API-Key": getApiKey(), ...extra };
+}
+
 export interface Spot {
     id: number;
     title: string;
@@ -52,13 +65,13 @@ export async function fetchSpots(params?: {
     if (params?.search) query.set("search", params.search);
     if (params?.tag) query.set("tag", params.tag);
 
-    const res = await fetch(`${API_BASE}/spots?${query}`);
+    const res = await fetch(`${API_BASE}/spots?${query}`, { headers: authHeaders() });
     if (!res.ok) throw new Error("Failed to fetch spots");
     return res.json();
 }
 
 export async function fetchSpot(id: number): Promise<Spot> {
-    const res = await fetch(`${API_BASE}/spots/${id}`);
+    const res = await fetch(`${API_BASE}/spots/${id}`, { headers: authHeaders() });
     if (!res.ok) throw new Error("Spot not found");
     return res.json();
 }
@@ -66,7 +79,7 @@ export async function fetchSpot(id: number): Promise<Spot> {
 export async function createSpot(data: Partial<Spot> & { tags?: string[] }): Promise<Spot> {
     const res = await fetch(`${API_BASE}/spots`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error("Failed to create spot");
@@ -74,14 +87,14 @@ export async function createSpot(data: Partial<Spot> & { tags?: string[] }): Pro
 }
 
 export async function deleteSpot(id: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/spots/${id}`, { method: "DELETE" });
+    const res = await fetch(`${API_BASE}/spots/${id}`, { method: "DELETE", headers: authHeaders() });
     if (!res.ok) throw new Error("Failed to delete spot");
 }
 
 export async function updateSpot(id: number, data: Partial<Spot>): Promise<Spot> {
     const res = await fetch(`${API_BASE}/spots/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error("Failed to update spot");
@@ -93,7 +106,7 @@ export async function updateSpot(id: number, data: Partial<Spot>): Promise<Spot>
 export async function scrapeUrl(url: string): Promise<ScrapeResult> {
     const res = await fetch(`${API_BASE}/sources/scrape`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ url }),
     });
     if (!res.ok) throw new Error("Failed to scrape URL");
@@ -107,7 +120,7 @@ export async function manualExtract(data: {
 }): Promise<ScrapeResult> {
     const res = await fetch(`${API_BASE}/sources/manual`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error("Failed to extract");

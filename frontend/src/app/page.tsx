@@ -5,7 +5,7 @@ import UrlImporter from "@/components/UrlImporter";
 import SpotCard from "@/components/SpotCard";
 import RegionFilter from "@/components/RegionFilter";
 import ThemeToggle from "@/components/ThemeToggle";
-import { fetchSpots, Spot, ScrapeResult } from "@/lib/api";
+import { fetchSpots, Spot, ScrapeResult, getApiKey, setApiKey } from "@/lib/api";
 
 export default function Home() {
   const [spots, setSpots] = useState<Spot[]>([]);
@@ -13,6 +13,25 @@ export default function Home() {
   const [country, setCountry] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [authed, setAuthed] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  useEffect(() => {
+    if (getApiKey()) setAuthed(true);
+  }, []);
+
+  const handleLogin = async () => {
+    setApiKey(keyInput);
+    try {
+      await fetchSpots();
+      setAuthed(true);
+      setAuthError("");
+    } catch {
+      setApiKey("");
+      setAuthError("密碼錯誤");
+    }
+  };
   const [lastResult, setLastResult] = useState<ScrapeResult | null>(null);
 
   const loadSpots = useCallback(async () => {
@@ -32,13 +51,48 @@ export default function Home() {
   }, [region, country, search]);
 
   useEffect(() => {
-    loadSpots();
-  }, [loadSpots]);
+    if (authed) loadSpots();
+  }, [loadSpots, authed]);
 
   const handleImportComplete = (result: ScrapeResult) => {
     setLastResult(result);
     loadSpots();
   };
+
+  if (!authed) {
+    return (
+      <main className="min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-sm">
+          <div className="text-center mb-8">
+            <div className="flex items-center justify-center gap-1.5 mb-3">
+              <span className="bg-mag-black text-mag-paper text-[10px] px-1.5 py-0.5 font-black">APP</span>
+              <span className="text-[10px] font-bold tracking-[0.15em] uppercase text-mag-gold">Travel Spot</span>
+            </div>
+            <h1 className="font-noto text-[22px] font-bold text-mag-black">旅遊景點蒐集</h1>
+          </div>
+          <div className="border border-card-border bg-card-bg p-6 shadow-[0_4px_20px_rgba(0,0,0,0.03)]">
+            <label className="block text-[10px] font-black text-mag-gray uppercase tracking-[0.2em] mb-2">Password</label>
+            <input
+              type="password"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && keyInput) handleLogin(); }}
+              placeholder="請輸入密碼..."
+              className="w-full border border-input-border bg-input-bg px-4 py-3 text-sm font-bold text-mag-black placeholder-mag-gray/50 focus:border-mag-gold focus:outline-none mb-3"
+            />
+            {authError && <p className="text-xs font-bold text-mag-red mb-3">{authError}</p>}
+            <button
+              onClick={handleLogin}
+              disabled={!keyInput}
+              className="w-full py-3 bg-mag-black text-mag-paper text-xs font-black tracking-wider uppercase active:scale-[0.97] transition-all disabled:opacity-40"
+            >
+              進入
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">

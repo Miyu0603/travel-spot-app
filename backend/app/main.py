@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.database import engine, Base
 from app.routers import spots, sources
@@ -27,6 +29,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API key authentication middleware
+API_SECRET = os.getenv("API_SECRET", "")
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Skip auth for root, docs, OPTIONS (CORS preflight)
+        if request.url.path in ("/", "/docs", "/openapi.json") or request.method == "OPTIONS":
+            return await call_next(request)
+        # Skip if no secret configured (local dev)
+        if not API_SECRET:
+            return await call_next(request)
+        token = request.headers.get("X-API-Key", "")
+        if token != API_SECRET:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
+
+app.add_middleware(ApiKeyMiddleware)
 
 app.include_router(spots.router, prefix="/api/spots", tags=["景點"])
 app.include_router(sources.router, prefix="/api/sources", tags=["來源"])
