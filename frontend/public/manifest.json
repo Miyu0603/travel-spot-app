@@ -1,0 +1,17 @@
+{
+    "name": "Travel Spot App",
+    "short_name": "TravelSpot",
+    "description": "從社群貼文自動萃取旅遊景點資訊",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#F9F9F7",
+    "theme_color": "#C5A059",
+    "icons": [
+        {
+            "src": "/icon_180.png",
+            "sizes": "180x180",
+            "type": "image/png",
+            "purpose": "any"
+        }
+    ]
+}
