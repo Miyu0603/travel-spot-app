@@ -48,11 +48,11 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [region, country, search]);
+  }, [region, country, search, authed]);
 
   useEffect(() => {
     if (authed) loadSpots();
-  }, [loadSpots, authed]);
+  }, [loadSpots]);
 
   const handleImportComplete = (result: ScrapeResult) => {
     setLastResult(result);

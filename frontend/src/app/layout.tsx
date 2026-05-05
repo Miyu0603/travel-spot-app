@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Noto_Serif_JP } from "next/font/google";
 import "./globals.css";
 
@@ -18,6 +18,13 @@ const notoSerifJP = Noto_Serif_JP({
   weight: ["700", "900"],
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export const metadata: Metadata = {
   title: "Travel Spot App",
   description: "從社群貼文自動萃取旅遊景點資訊",
@@ -26,12 +33,6 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "default",
     title: "TravelSpot",
-  },
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
-    userScalable: false,
   },
 };
 
