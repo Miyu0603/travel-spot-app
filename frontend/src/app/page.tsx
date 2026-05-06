@@ -95,7 +95,7 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">
+    <main className="mx-auto max-w-6xl px-3 sm:px-6 py-6">
       {/* Header */}
       <div className="mb-10 flex items-start justify-between">
         <div>
