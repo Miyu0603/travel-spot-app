@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # Comma-separated list of origins allowed to call the API
     cors_origins: str = "http://localhost:3000,http://localhost:3001"
 
+    # Caps on the AI extraction endpoints, which cost money per call.
+    # Set either to 0 to disable that limit.
+    rate_limit_per_ip_hourly: int = 10
+    rate_limit_global_daily: int = 50
+
     # Every key present in .env must be declared above: pydantic-settings rejects
     # unknown keys, and the resulting error prints the offending value in plain text.
     model_config = {"env_file": ".env"}

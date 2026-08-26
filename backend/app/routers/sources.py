@@ -10,12 +10,17 @@ from app.schemas.source import SourceCreate, SourceManualCreate, SourceResponse,
 from app.services.scraper import scrape_url, detect_platform
 from app.services.ai_extractor import extract_spots_from_text
 from app.services.geo_service import enrich_spots
+from app.services.rate_limit import enforce_extraction_limit
 from app.services.whisper_service import transcribe_video
 
 router = APIRouter()
 
 
-@router.post("/scrape", response_model=ScrapeResult)
+@router.post(
+    "/scrape",
+    response_model=ScrapeResult,
+    dependencies=[Depends(enforce_extraction_limit)],
+)
 async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_db)):
     """
     Main pipeline: 
@@ -70,7 +75,11 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
     )
 
 
-@router.post("/manual", response_model=ScrapeResult)
+@router.post(
+    "/manual",
+    response_model=ScrapeResult,
+    dependencies=[Depends(enforce_extraction_limit)],
+)
 async def manual_extract(source_in: SourceManualCreate, db: Session = Depends(get_db)):
     """
     Fallback: user manually pastes content.

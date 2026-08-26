@@ -18,3 +18,7 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: RATE_LIMIT_PER_IP_HOURLY
+        sync: false
+      - key: RATE_LIMIT_GLOBAL_DAILY
+        sync: false
