@@ -182,7 +182,15 @@ export default function SpotCard({
                 {spot.business_hours && (
                     <div className="flex items-start gap-2">
                         <span className="text-mag-gold font-black text-[10px] uppercase tracking-wider w-10 shrink-0 pt-0.5">時間</span>
-                        <span className="font-bold text-mag-black">{spot.business_hours}</span>
+                        <span className="min-w-0">
+                            <span className="font-bold text-mag-black">{spot.business_hours}</span>
+                            {/* Hours are partly filled in by the LLM from memory, so they can be
+                                stale. Rendered here rather than stored, so the edit form keeps the
+                                raw value and every spot gets the caveat, not just newly imported ones. */}
+                            <span className="block text-[11px] font-normal leading-snug text-mag-gray/70 mt-0.5">
+                                （營業時間可能有調整，安排行程前請再次確認）
+                            </span>
+                        </span>
                     </div>
                 )}
                 {spot.notes && (
