@@ -8,7 +8,7 @@ from app.models.source import Source, SourceStatusEnum
 from app.models.spot import Spot, Tag
 from app.schemas.source import SourceCreate, SourceManualCreate, SourceResponse, ScrapeResult
 from app.services.scraper import scrape_url, detect_platform
-from app.services.ai_extractor import extract_spots_from_text
+from app.services.ai_extractor import ExtractionError, extract_spots_from_text
 from app.services.geo_service import enrich_spots
 from app.services.rate_limit import enforce_extraction_limit
 from app.services.whisper_service import transcribe_video
@@ -63,7 +63,10 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
     db.commit()
 
     # Step 3 & 4: AI extraction + geo enrichment
-    spots_data = await _process_text(text, source, db)
+    try:
+        spots_data, discarded = await _process_text(text, source, db)
+    except ExtractionError as exc:
+        return _extraction_failed(source, exc, db)
 
     source.status = SourceStatusEnum.COMPLETED
     db.commit()
@@ -71,7 +74,7 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
     return ScrapeResult(
         source=_source_to_response(source),
         spots=spots_data,
-        message=f"成功萃取 {len(spots_data)} 個景點",
+        message=_success_message(len(spots_data), discarded),
     )
 
 
@@ -95,7 +98,10 @@ async def manual_extract(source_in: SourceManualCreate, db: Session = Depends(ge
     db.commit()
     db.refresh(source)
 
-    spots_data = await _process_text(source_in.raw_content, source, db)
+    try:
+        spots_data, discarded = await _process_text(source_in.raw_content, source, db)
+    except ExtractionError as exc:
+        return _extraction_failed(source, exc, db)
 
     source.status = SourceStatusEnum.COMPLETED
     db.commit()
@@ -103,7 +109,7 @@ async def manual_extract(source_in: SourceManualCreate, db: Session = Depends(ge
     return ScrapeResult(
         source=_source_to_response(source),
         spots=spots_data,
-        message=f"成功萃取 {len(spots_data)} 個景點",
+        message=_success_message(len(spots_data), discarded),
     )
 
 
@@ -114,12 +120,15 @@ def list_sources(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
     return [_source_to_response(s) for s in sources]
 
 
-async def _process_text(text: str, source: Source, db: Session) -> list[dict]:
-    """Extract spots from text using AI, enrich with geo, and save to DB."""
-    # AI extraction
-    raw_spots = await extract_spots_from_text(text)
+async def _process_text(text: str, source: Source, db: Session) -> tuple[list[dict], int]:
+    """Extract spots from text using AI, enrich with geo, and save to DB.
+
+    Returns (saved_spots, discarded_count). Propagates ExtractionError so the
+    caller can report a real failure instead of an empty result.
+    """
+    raw_spots, discarded = await extract_spots_from_text(text)
     if not raw_spots:
-        return []
+        return [], discarded
 
     # Geo enrichment
     enriched_spots = await enrich_spots(raw_spots)
@@ -157,7 +166,26 @@ async def _process_text(text: str, source: Source, db: Session) -> list[dict]:
         saved.append(spot_data)
 
     db.commit()
-    return saved
+    return saved, discarded
+
+
+def _extraction_failed(source: Source, exc: ExtractionError, db: Session) -> ScrapeResult:
+    """Record the failure on the source so it is not left looking successful."""
+    source.status = SourceStatusEnum.FAILED
+    source.error_message = str(exc)
+    db.commit()
+    return ScrapeResult(
+        source=_source_to_response(source),
+        message=f"萃取失敗：{exc}",
+    )
+
+
+def _success_message(saved: int, discarded: int) -> str:
+    message = f"成功萃取 {saved} 個景點"
+    if discarded:
+        # Say so rather than silently returning fewer spots than the post held.
+        message += f"（另有 {discarded} 筆資料格式有誤已略過）"
+    return message
 
 
 def _source_to_response(source: Source) -> SourceResponse:
