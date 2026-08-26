@@ -18,7 +18,12 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [loadError, setLoadError] = useState("");
 
+  // This page is a static export, so a lazy useState initialiser would read
+  // localStorage at build time (where there is no window), decide "not logged in",
+  // and then disagree with the client — a hydration mismatch. Reading it after
+  // mount is the correct pattern here; the lint rule cannot express that.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (getApiKey()) setAuthed(true);
   }, []);
 
@@ -64,7 +69,12 @@ export default function Home() {
     }
   }, [region, country, search]);
 
+  // Refetching when the filters change is exactly "subscribe to an external
+  // system"; the synchronous setState the rule objects to is setLoading, and a
+  // loading indicator is required (UX-02). Silencing this properly would mean
+  // adopting a data-fetching library, which is a larger change than it earns.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (authed) loadSpots();
   }, [authed, loadSpots]);
 
