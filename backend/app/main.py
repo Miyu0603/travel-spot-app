@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.config import settings
 from app.database import engine, Base
 from app.routers import spots, sources
 
@@ -15,23 +16,11 @@ app = FastAPI(
     version="0.1.0",
 )
 
-import os
-
-allowed_origins = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:3001"
-).split(",")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+allowed_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 
 # API key authentication middleware
-API_SECRET = os.getenv("API_SECRET", "")
+API_SECRET = settings.api_secret
+
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -46,7 +35,19 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         return await call_next(request)
 
+
+# Order matters: add_middleware wraps outwards, so the LAST one added runs first.
+# CORS must be outermost, otherwise the 401 short-circuits before CORS headers are
+# attached and the browser blocks the response — the frontend then sees a generic
+# network failure instead of "your password expired".
 app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(spots.router, prefix="/api/spots", tags=["景點"])
 app.include_router(sources.router, prefix="/api/sources", tags=["來源"])

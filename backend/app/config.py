@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     # Google Maps / Places
     google_maps_api_key: str = ""
 
+    # Shared password for the API. Empty means auth is disabled (local dev).
+    api_secret: str = ""
+
+    # Comma-separated list of origins allowed to call the API
+    cors_origins: str = "http://localhost:3000,http://localhost:3001"
+
+    # Every key present in .env must be declared above: pydantic-settings rejects
+    # unknown keys, and the resulting error prints the offending value in plain text.
     model_config = {"env_file": ".env"}
 
 
