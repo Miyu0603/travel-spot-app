@@ -5,7 +5,7 @@ import UrlImporter from "@/components/UrlImporter";
 import SpotCard from "@/components/SpotCard";
 import RegionFilter from "@/components/RegionFilter";
 import ThemeToggle from "@/components/ThemeToggle";
-import { fetchSpots, Spot, ScrapeResult, getApiKey, setApiKey } from "@/lib/api";
+import { fetchSpots, Spot, ScrapeResult, getApiKey, setApiKey, ApiError } from "@/lib/api";
 
 export default function Home() {
   const [spots, setSpots] = useState<Spot[]>([]);
@@ -16,6 +16,7 @@ export default function Home() {
   const [authed, setAuthed] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [authError, setAuthError] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     if (getApiKey()) setAuthed(true);
@@ -27,9 +28,12 @@ export default function Home() {
       await fetchSpots();
       setAuthed(true);
       setAuthError("");
-    } catch {
+    } catch (err) {
       setApiKey("");
-      setAuthError("密碼錯誤");
+      // A server we can't reach is not a wrong password — saying so sends the
+      // user hunting for a typo that isn't there.
+      if (err instanceof ApiError && !err.isAuthError) setAuthError(err.message);
+      else setAuthError("密碼錯誤");
     }
   };
   const [lastResult, setLastResult] = useState<ScrapeResult | null>(null);
@@ -43,16 +47,26 @@ export default function Home() {
         search: search || undefined,
       });
       setSpots(data);
-    } catch {
-      console.error("Failed to load spots");
+      setLoadError("");
+    } catch (err) {
+      // Without this split, a dropped connection and an empty database both
+      // render as "目前沒有景點" and there is no way to tell them apart.
+      if (err instanceof ApiError && err.isAuthError) {
+        setApiKey("");
+        setAuthed(false);
+        setAuthError("密碼已失效，請重新輸入");
+        return;
+      }
+      setSpots([]);
+      setLoadError(err instanceof ApiError ? err.message : "載入景點失敗，請稍後再試");
     } finally {
       setLoading(false);
     }
-  }, [region, country, search, authed]);
+  }, [region, country, search]);
 
   useEffect(() => {
     if (authed) loadSpots();
-  }, [loadSpots]);
+  }, [authed, loadSpots]);
 
   const handleImportComplete = (result: ScrapeResult) => {
     setLastResult(result);
@@ -158,7 +172,19 @@ export default function Home() {
       </div>
 
       {/* Spots list */}
-      {!loading && spots.length === 0 ? (
+      {loadError ? (
+        <div className="text-center py-16 bg-card-bg border border-dashed border-mag-red/40">
+          <div className="text-4xl mb-3">⚠️</div>
+          <p className="text-sm font-black text-mag-red">{loadError}</p>
+          <p className="text-xs text-mag-gray/60 mt-1">你的景點沒有遺失，只是這次讀取失敗</p>
+          <button
+            onClick={loadSpots}
+            className="mt-4 px-5 py-2 bg-mag-black text-mag-paper text-xs font-black tracking-wider uppercase active:scale-[0.97] transition-all"
+          >
+            重試
+          </button>
+        </div>
+      ) : !loading && spots.length === 0 ? (
         <div className="text-center py-16 bg-card-bg border border-dashed border-card-border">
           <div className="text-4xl mb-3">🗺️</div>
           <p className="text-sm font-black text-mag-gray">目前沒有景點</p>
