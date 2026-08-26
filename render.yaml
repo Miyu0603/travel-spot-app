@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: travel-spot-api
+    name: travel-spot-app
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
