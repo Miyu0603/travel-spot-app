@@ -20,7 +20,16 @@ from app.models.source import Source  # noqa: F401  (needed to configure mappers
 from app.models.spot import Spot
 from app.services.geo_service import lookup_google_place, probe_places_access
 
-FILLABLE = ("address", "business_hours", "latitude", "longitude", "google_maps_url")
+# Fields the edit form exposes: only filled when empty, so a manual correction
+# is never overwritten unless --refresh is asked for.
+USER_EDITABLE = ("address", "business_hours")
+
+# Fields no UI can change. Places is always the better source, and
+# google_maps_url in particular is never empty — the old code always wrote a
+# search URL — so fill-when-empty would never replace it with the real place link.
+ALWAYS_REFRESH = ("latitude", "longitude", "google_maps_url")
+
+FILLABLE = USER_EDITABLE + ALWAYS_REFRESH
 
 
 def _current(spot: Spot, field: str):
@@ -49,7 +58,8 @@ async def main() -> int:
     try:
         spots = db.query(Spot).order_by(Spot.id).all()
         print(f"共 {len(spots)} 筆景點，模式："
-              f"{'覆寫既有值' if args.refresh else '只補空欄位'}"
+              f"{'覆寫既有的地址與營業時間' if args.refresh else '地址與營業時間只補空欄位'}"
+              f"（座標與地圖連結一律更新）"
               f"{'（dry-run，不寫入）' if args.dry_run else ''}\n")
 
         updated = 0
@@ -67,9 +77,13 @@ async def main() -> int:
                 new_value = found.get(field)
                 if new_value in (None, ""):
                     continue
-                if args.refresh or _is_empty(_current(spot, field)):
-                    if _current(spot, field) != new_value:
-                        changes[field] = new_value
+                may_write = (
+                    field in ALWAYS_REFRESH
+                    or args.refresh
+                    or _is_empty(_current(spot, field))
+                )
+                if may_write and _current(spot, field) != new_value:
+                    changes[field] = new_value
 
             extras = found.get("place_extras")
             if extras and extras not in (spot.notes or ""):
