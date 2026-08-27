@@ -14,7 +14,11 @@ from app.schemas.source import SourceCreate, SourceManualCreate, SourceResponse,
 from app.services.scraper import scrape_url, detect_platform
 from app.services.ai_extractor import ExtractionError, extract_spots_from_text
 from app.services.geo_service import enrich_spots
-from app.services.media_service import fetch_images_as_data_urls, frames_to_data_urls
+from app.services.media_service import (
+    fetch_images_as_data_urls,
+    frames_to_data_urls,
+    summarise_failures,
+)
 from app.services.rate_limit import enforce_extraction_limit
 from app.services.video_service import (
     FrameExtractionError,
@@ -70,13 +74,13 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
     # narration, on-screen text in the video, and text baked into images.
     text, frames, warnings = await _harvest_video(scrape_result.get("video_url"), text)
     image_urls = scrape_result.get("images") or []
-    images, failed_images = await fetch_images_as_data_urls(
+    images, image_failures = await fetch_images_as_data_urls(
         image_urls, settings.max_post_images
     )
-    if failed_images:
+    if image_failures:
         warnings.append(
-            f"貼文有 {len(image_urls)} 張圖片，其中 {failed_images} 張讀取失敗"
-            "（圖片網址可能已失效）"
+            f"貼文有 {len(image_urls)} 張圖片，其中 {len(image_failures)} 張讀取失敗"
+            f"（{summarise_failures(image_failures)}）"
         )
     if image_urls and not images and settings.max_post_images > 0:
         warnings.append("圖片全數無法讀取，圖卡中的景點資訊本次未納入")

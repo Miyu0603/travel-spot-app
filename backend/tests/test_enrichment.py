@@ -222,18 +222,32 @@ def test_unsupported_image_type_is_rejected():
     assert to_data_url(b"<html>", "text/html") is None
 
 
-def test_failed_images_are_skipped_but_counted():
-    """Reported, not swallowed: when a post keeps its spots on the images and
-    every one fails, a thin result must not look like a thin post."""
-    media_service.httpx.AsyncClient = fake_transport(404)
-    collected, failed = asyncio.run(
+def test_failed_images_are_reported_with_their_reason():
+    """Blocked, expired and timed out need different fixes; a bare count sent us
+    guessing and cost several paid extractions."""
+    media_service.httpx.AsyncClient = fake_transport(403)
+    collected, failures = asyncio.run(
         media_service.fetch_images_as_data_urls(["https://x/a.jpg", "https://x/b.jpg"], 4)
     )
-    assert collected == [] and failed == 2
+    assert collected == []
+    assert failures == ["HTTP 403", "HTTP 403"]
+    assert media_service.summarise_failures(failures) == "HTTP 403 2 張"
+
+
+def test_failure_summary_groups_distinct_reasons():
+    assert media_service.summarise_failures(
+        ["HTTP 403", "逾時", "HTTP 403"]
+    ) == "HTTP 403 2 張、逾時 1 張"
+
+
+def test_image_requests_look_like_a_browser():
+    """Instagram's CDN serves differently to python-httpx's default agent."""
+    assert "Mozilla/5.0" in media_service.BROWSER_HEADERS["User-Agent"]
+    assert "instagram.com" in media_service.BROWSER_HEADERS["Referer"]
 
 
 def test_image_fetching_can_be_disabled():
-    assert asyncio.run(media_service.fetch_images_as_data_urls(["https://x/a.jpg"], 0)) == ([], 0)
+    assert asyncio.run(media_service.fetch_images_as_data_urls(["https://x/a.jpg"], 0)) == ([], [])
 
 
 def test_frames_are_wrapped_as_data_urls():

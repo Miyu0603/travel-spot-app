@@ -13,6 +13,18 @@ import httpx
 # cannot blow up the request body.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
+# Instagram and Facebook CDNs serve differently — often not at all — to clients
+# that do not look like a browser. scrape_threads already had to do this; the
+# image fetcher was left sending httpx's default python-httpx User-Agent.
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    "Referer": "https://www.instagram.com/",
+}
+
 _ALLOWED_TYPES = {
     "image/jpeg": "jpeg",
     "image/jpg": "jpeg",
@@ -52,35 +64,41 @@ def sample_evenly(urls: list[str], limit: int) -> list[str]:
 
 async def fetch_images_as_data_urls(
     urls: list[str], limit: int
-) -> tuple[list[str], int]:
-    """Download post images, returning (data_urls, failed_count).
+) -> tuple[list[str], list[str]]:
+    """Download post images, returning (data_urls, failure_reasons).
 
     A failure is never fatal — a missing image only costs context, while raising
-    would lose the whole extraction. But it is reported: when a post keeps its
-    spots on the images and every image fails, silently returning fewer results
-    looks exactly like a post that had less in it.
+    would lose the whole extraction. But the reason is reported rather than just
+    a count: blocked (403), expired (404) and timed out need different fixes, and
+    guessing between them has already cost several paid extractions.
     """
     if limit <= 0 or not urls:
-        return [], 0
+        return [], []
 
     collected: list[str] = []
-    failed = 0
+    failures: list[str] = []
     candidates = sample_evenly(
         [u for u in urls if isinstance(u, str) and u.startswith("http")], limit
     )
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=30, follow_redirects=True, headers=BROWSER_HEADERS
+    ) as client:
         for url in candidates:
             if len(collected) >= limit:
                 break
-            if not isinstance(url, str) or not url.startswith("http"):
-                continue
             try:
                 response = await client.get(url)
-            except httpx.HTTPError:
-                failed += 1
+            except httpx.TimeoutException:
+                failures.append("逾時")
                 continue
-            if response.status_code != 200 or len(response.content) > MAX_IMAGE_BYTES:
-                failed += 1
+            except httpx.HTTPError:
+                failures.append("連線失敗")
+                continue
+            if response.status_code != 200:
+                failures.append(f"HTTP {response.status_code}")
+                continue
+            if len(response.content) > MAX_IMAGE_BYTES:
+                failures.append("檔案過大")
                 continue
             data_url = to_data_url(
                 response.content, response.headers.get("content-type", "")
@@ -88,8 +106,18 @@ async def fetch_images_as_data_urls(
             if data_url:
                 collected.append(data_url)
             else:
-                failed += 1
-    return collected, failed
+                failures.append(
+                    f"格式不支援（{response.headers.get('content-type', '未知')}）"
+                )
+    return collected, failures
+
+
+def summarise_failures(failures: list[str]) -> str:
+    """Group reasons so the message names the cause instead of just a count."""
+    counts: dict[str, int] = {}
+    for reason in failures:
+        counts[reason] = counts.get(reason, 0) + 1
+    return "、".join(f"{reason} {count} 張" for reason, count in counts.items())
 
 
 def frames_to_data_urls(frames: list[str]) -> list[str]:
