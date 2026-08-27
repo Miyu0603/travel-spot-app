@@ -10,10 +10,13 @@ from app.routers import spots, sources
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
+# Bumped whenever deployed behaviour changes, so / can prove which build is live.
+APP_VERSION = "0.2.0"
+
 app = FastAPI(
     title="Travel Spot App",
     description="從社群貼文萃取旅遊景點資訊的 API",
-    version="0.1.0",
+    version=APP_VERSION,
 )
 
 allowed_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
@@ -55,4 +58,21 @@ app.include_router(sources.router, prefix="/api/sources", tags=["來源"])
 
 @app.get("/")
 def root():
-    return {"message": "Travel Spot App API is running"}
+    """Health check that also reports which capabilities are actually live.
+
+    Without this there is no way to tell a stale deploy from a missing env var:
+    both make Places and vision quietly fall back, and the only visible symptom
+    is thinner results. Only booleans are exposed — never the keys themselves.
+    """
+    return {
+        "message": "Travel Spot App API is running",
+        "version": APP_VERSION,
+        "capabilities": {
+            "places": bool(settings.google_maps_api_key),
+            "ai_extraction": bool(settings.openai_api_key),
+            "scraping": bool(settings.apify_api_token),
+            "auth_required": bool(settings.api_secret),
+            "post_images": settings.max_post_images,
+            "video_frames": settings.video_frame_count,
+        },
+    }

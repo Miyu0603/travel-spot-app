@@ -64,9 +64,17 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
     # Step 2: pull everything the post carries besides its caption — spoken
     # narration, on-screen text in the video, and text baked into images.
     text, frames, warnings = await _harvest_video(scrape_result.get("video_url"), text)
-    images = await fetch_images_as_data_urls(
-        scrape_result.get("images") or [], settings.max_post_images
+    image_urls = scrape_result.get("images") or []
+    images, failed_images = await fetch_images_as_data_urls(
+        image_urls, settings.max_post_images
     )
+    if failed_images:
+        warnings.append(
+            f"貼文有 {len(image_urls)} 張圖片，其中 {failed_images} 張讀取失敗"
+            "（圖片網址可能已失效）"
+        )
+    if image_urls and not images and settings.max_post_images > 0:
+        warnings.append("圖片全數無法讀取，圖卡中的景點資訊本次未納入")
 
     source.raw_content = text
     db.commit()

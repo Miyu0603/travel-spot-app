@@ -21,6 +21,37 @@ def detect_platform(url: str) -> PlatformEnum:
     return PlatformEnum.OTHER
 
 
+def _collect_media(post: dict) -> tuple[list[str], str | None]:
+    """Every image in the post, plus the first video, in slide order.
+
+    A carousel is where travel accounts put the actual spots — one card per
+    place — but displayUrl is only the cover, so reading just that loses every
+    slide after the first. Apify has changed which field carries the slides
+    between actor versions, so all the known shapes are checked rather than
+    trusting one.
+    """
+    images: list[str] = []
+    video_url: str | None = post.get("videoUrl") or None
+
+    def add(url: object) -> None:
+        if isinstance(url, str) and url.startswith("http") and url not in images:
+            images.append(url)
+
+    for child in post.get("childPosts") or []:
+        if not isinstance(child, dict):
+            continue
+        if child.get("videoUrl") and not video_url:
+            video_url = child["videoUrl"]
+        add(child.get("displayUrl"))
+
+    for url in post.get("images") or []:
+        add(url)
+
+    add(post.get("displayUrl"))
+
+    return images, video_url
+
+
 async def scrape_instagram(url: str) -> dict:
     """Scrape an Instagram post using Apify."""
     if not settings.apify_api_token:
@@ -47,11 +78,12 @@ async def scrape_instagram(url: str) -> dict:
             return {"success": False, "error": "No data returned from Apify"}
 
         post = data[0]
+        images, video_url = _collect_media(post)
         return {
             "success": True,
             "text": post.get("caption", ""),
-            "images": [post["displayUrl"]] if post.get("displayUrl") else [],
-            "video_url": post.get("videoUrl"),
+            "images": images,
+            "video_url": video_url,
             "timestamp": post.get("timestamp"),
         }
 
@@ -81,11 +113,12 @@ async def scrape_facebook(url: str) -> dict:
             return {"success": False, "error": "No data returned from Apify"}
 
         post = data[0]
+        images, video_url = _collect_media(post)
         return {
             "success": True,
             "text": post.get("text", ""),
-            "images": post.get("images", []),
-            "video_url": post.get("videoUrl"),
+            "images": images,
+            "video_url": video_url,
         }
 
 

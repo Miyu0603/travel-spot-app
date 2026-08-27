@@ -218,17 +218,81 @@ def test_unsupported_image_type_is_rejected():
     assert to_data_url(b"<html>", "text/html") is None
 
 
-def test_oversized_and_failed_images_are_skipped_not_fatal():
+def test_failed_images_are_skipped_but_counted():
+    """Reported, not swallowed: when a post keeps its spots on the images and
+    every one fails, a thin result must not look like a thin post."""
     media_service.httpx.AsyncClient = fake_transport(404)
-    assert asyncio.run(media_service.fetch_images_as_data_urls(["https://x/a.jpg"], 4)) == []
+    collected, failed = asyncio.run(
+        media_service.fetch_images_as_data_urls(["https://x/a.jpg", "https://x/b.jpg"], 4)
+    )
+    assert collected == [] and failed == 2
 
 
 def test_image_fetching_can_be_disabled():
-    assert asyncio.run(media_service.fetch_images_as_data_urls(["https://x/a.jpg"], 0)) == []
+    assert asyncio.run(media_service.fetch_images_as_data_urls(["https://x/a.jpg"], 0)) == ([], 0)
 
 
 def test_frames_are_wrapped_as_data_urls():
     assert media_service.frames_to_data_urls(["QUJD"]) == ["data:image/jpeg;base64,QUJD"]
+
+
+# --- carousel media collection ---
+
+def test_carousel_slides_are_all_collected_in_order():
+    """The spots live one per slide; reading only displayUrl loses all but the cover."""
+    from app.services.scraper import _collect_media
+
+    images, video = _collect_media({
+        "displayUrl": "https://cover.jpg",
+        "childPosts": [
+            {"displayUrl": "https://s1.jpg"},
+            {"displayUrl": "https://s2.jpg"},
+            {"displayUrl": "https://s3.jpg", "videoUrl": "https://v.mp4"},
+        ],
+    })
+    assert images == [
+        "https://s1.jpg", "https://s2.jpg", "https://s3.jpg", "https://cover.jpg",
+    ]
+    assert video == "https://v.mp4"
+
+
+def test_images_array_shape_is_also_supported():
+    """Apify has moved the slides between fields across actor versions."""
+    from app.services.scraper import _collect_media
+
+    images, _ = _collect_media({
+        "displayUrl": "https://cover.jpg",
+        "images": ["https://a.jpg", "https://b.jpg"],
+    })
+    assert images == ["https://a.jpg", "https://b.jpg", "https://cover.jpg"]
+
+
+def test_duplicate_and_invalid_urls_are_dropped():
+    from app.services.scraper import _collect_media
+
+    images, _ = _collect_media({
+        "displayUrl": "https://a.jpg",
+        "images": ["https://a.jpg", None, 42, "not-a-url", "https://b.jpg"],
+    })
+    # De-duplication keeps the first occurrence, so the cover does not jump to
+    # the end just because it also appears in the slide list.
+    assert images == ["https://a.jpg", "https://b.jpg"]
+
+
+def test_post_level_video_still_wins_when_present():
+    from app.services.scraper import _collect_media
+
+    _, video = _collect_media({
+        "videoUrl": "https://main.mp4",
+        "childPosts": [{"videoUrl": "https://child.mp4"}],
+    })
+    assert video == "https://main.mp4"
+
+
+def test_empty_post_yields_nothing():
+    from app.services.scraper import _collect_media
+
+    assert _collect_media({}) == ([], None)
 
 
 # --- the multimodal message ---

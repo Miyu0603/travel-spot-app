@@ -28,13 +28,21 @@ def to_data_url(raw: bytes, content_type: str) -> str | None:
     return f"data:image/{kind};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
-async def fetch_images_as_data_urls(urls: list[str], limit: int) -> list[str]:
-    """Download post images. Failures are skipped, never fatal — a missing image
-    only costs us some context, while raising would lose the whole extraction."""
+async def fetch_images_as_data_urls(
+    urls: list[str], limit: int
+) -> tuple[list[str], int]:
+    """Download post images, returning (data_urls, failed_count).
+
+    A failure is never fatal — a missing image only costs context, while raising
+    would lose the whole extraction. But it is reported: when a post keeps its
+    spots on the images and every image fails, silently returning fewer results
+    looks exactly like a post that had less in it.
+    """
     if limit <= 0 or not urls:
-        return []
+        return [], 0
 
     collected: list[str] = []
+    failed = 0
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         for url in urls:
             if len(collected) >= limit:
@@ -44,17 +52,19 @@ async def fetch_images_as_data_urls(urls: list[str], limit: int) -> list[str]:
             try:
                 response = await client.get(url)
             except httpx.HTTPError:
+                failed += 1
                 continue
-            if response.status_code != 200:
-                continue
-            if len(response.content) > MAX_IMAGE_BYTES:
+            if response.status_code != 200 or len(response.content) > MAX_IMAGE_BYTES:
+                failed += 1
                 continue
             data_url = to_data_url(
                 response.content, response.headers.get("content-type", "")
             )
             if data_url:
                 collected.append(data_url)
-    return collected
+            else:
+                failed += 1
+    return collected, failed
 
 
 def frames_to_data_urls(frames: list[str]) -> list[str]:
