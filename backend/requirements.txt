@@ -5,3 +5,4 @@ pydantic-settings==2.7.*
 httpx==0.28.*
 python-multipart==0.0.*
 psycopg2-binary==2.9.*
+imageio-ffmpeg==0.6.*

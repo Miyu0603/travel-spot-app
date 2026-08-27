@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     rate_limit_per_ip_hourly: int = 10
     rate_limit_global_daily: int = 50
 
+    # How many post images and video frames to show the vision model.
+    # Each one adds tokens to every extraction; 0 disables that source.
+    max_post_images: int = 4
+    video_frame_count: int = 3
+
     # Every key present in .env must be declared above: pydantic-settings rejects
     # unknown keys, and the resulting error prints the offending value in plain text.
     model_config = {"env_file": ".env"}

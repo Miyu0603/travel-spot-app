@@ -1,8 +1,11 @@
 import json
+import os
+import tempfile
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models.source import Source, SourceStatusEnum
 from app.models.spot import Spot, Tag
@@ -10,8 +13,14 @@ from app.schemas.source import SourceCreate, SourceManualCreate, SourceResponse,
 from app.services.scraper import scrape_url, detect_platform
 from app.services.ai_extractor import ExtractionError, extract_spots_from_text
 from app.services.geo_service import enrich_spots
+from app.services.media_service import fetch_images_as_data_urls, frames_to_data_urls
 from app.services.rate_limit import enforce_extraction_limit
-from app.services.whisper_service import transcribe_video
+from app.services.video_service import FrameExtractionError, extract_frames
+from app.services.whisper_service import (
+    TranscriptionError,
+    download_video,
+    transcribe_file,
+)
 
 router = APIRouter()
 
@@ -52,19 +61,19 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
 
     text = scrape_result.get("text", "")
 
-    # Step 2: If there's a video, transcribe it
-    video_url = scrape_result.get("video_url")
-    if video_url:
-        transcript = await transcribe_video(video_url)
-        if transcript:
-            text = f"{text}\n\n[影片逐字稿]\n{transcript}"
+    # Step 2: pull everything the post carries besides its caption — spoken
+    # narration, on-screen text in the video, and text baked into images.
+    text, frames, warnings = await _harvest_video(scrape_result.get("video_url"), text)
+    images = await fetch_images_as_data_urls(
+        scrape_result.get("images") or [], settings.max_post_images
+    )
 
     source.raw_content = text
     db.commit()
 
     # Step 3 & 4: AI extraction + geo enrichment
     try:
-        spots_data, discarded = await _process_text(text, source, db)
+        spots_data, discarded = await _process_text(text, source, db, images + frames)
     except ExtractionError as exc:
         return _extraction_failed(source, exc, db)
 
@@ -74,7 +83,7 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
     return ScrapeResult(
         source=_source_to_response(source),
         spots=spots_data,
-        message=_success_message(len(spots_data), discarded),
+        message=_success_message(len(spots_data), discarded, warnings),
     )
 
 
@@ -120,13 +129,54 @@ def list_sources(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
     return [_source_to_response(s) for s in sources]
 
 
-async def _process_text(text: str, source: Source, db: Session) -> tuple[list[dict], int]:
+async def _harvest_video(video_url: str | None, text: str) -> tuple[str, list[str], list[str]]:
+    """Transcribe a post's video and sample frames from it.
+
+    The video is downloaded once and reused for both, and every failure here is
+    reported rather than swallowed but never aborts the extraction — the caption
+    alone may still hold the spots.
+    """
+    if not video_url:
+        return text, [], []
+
+    warnings: list[str] = []
+    frames: list[str] = []
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        try:
+            await download_video(video_url, tmp_path)
+        except TranscriptionError as exc:
+            return text, [], [f"影片處理失敗：{exc}"]
+
+        try:
+            transcript = await transcribe_file(tmp_path)
+            if transcript.strip():
+                text = f"{text}\n\n[影片逐字稿]\n{transcript}"
+        except TranscriptionError as exc:
+            warnings.append(f"影片轉錄失敗：{exc}")
+
+        try:
+            frames = frames_to_data_urls(await extract_frames(tmp_path))
+        except FrameExtractionError as exc:
+            warnings.append(f"影片畫面擷取失敗：{exc}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return text, frames, warnings
+
+
+async def _process_text(
+    text: str, source: Source, db: Session, images: list[str] | None = None
+) -> tuple[list[dict], int]:
     """Extract spots from text using AI, enrich with geo, and save to DB.
 
     Returns (saved_spots, discarded_count). Propagates ExtractionError so the
     caller can report a real failure instead of an empty result.
     """
-    raw_spots, discarded = await extract_spots_from_text(text)
+    raw_spots, discarded = await extract_spots_from_text(text, images)
     if not raw_spots:
         return [], discarded
 
@@ -180,11 +230,15 @@ def _extraction_failed(source: Source, exc: ExtractionError, db: Session) -> Scr
     )
 
 
-def _success_message(saved: int, discarded: int) -> str:
+def _success_message(saved: int, discarded: int, warnings: list[str] | None = None) -> str:
     message = f"成功萃取 {saved} 個景點"
     if discarded:
         # Say so rather than silently returning fewer spots than the post held.
         message += f"（另有 {discarded} 筆資料格式有誤已略過）"
+    if warnings:
+        # Partial failures still change what was found; hiding them makes a
+        # short result look like the post simply had less in it.
+        message += "。" + "；".join(warnings)
     return message
 
 

@@ -22,3 +22,7 @@ services:
         sync: false
       - key: RATE_LIMIT_GLOBAL_DAILY
         sync: false
+      - key: MAX_POST_IMAGES
+        sync: false
+      - key: VIDEO_FRAME_COUNT
+        sync: false
