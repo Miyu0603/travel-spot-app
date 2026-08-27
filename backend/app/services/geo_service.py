@@ -123,15 +123,42 @@ async def probe_places_access() -> tuple[bool, str]:
     if response.status_code == 200:
         return True, "Google Places 可正常使用"
     if response.status_code == 403:
-        return False, (
-            "Google 拒絕存取（403）。請到 Google Cloud Console 啟用 "
-            "「Places API (New)」，並確認 API key 沒有被限制。"
-        )
+        # "key restricted" and "service not enabled" need different fixes, and
+        # Google distinguishes them in the error body even though both are 403.
+        reason, project = _denial_details(response)
+        where = f"（專案 {project}）" if project else ""
+        if reason == "API_KEY_SERVICE_BLOCKED":
+            return False, (
+                f"API key 的限制清單不含 Places API (New){where}。"
+                "請到 Google Cloud Console → 憑證 → 該金鑰 → API 限制，"
+                "把「Places API (New)」加入允許清單。注意它與舊版「Places API」"
+                "是不同項目。"
+            )
+        if reason == "SERVICE_DISABLED":
+            return False, (
+                f"專案尚未啟用 Places API (New){where}。"
+                "請到 Google Cloud Console → API 程式庫啟用它。"
+            )
+        return False, f"Google 拒絕存取（403，{reason or '原因不明'}）{where}"
     if response.status_code == 400:
         return False, "請求被拒（400），API key 可能無效"
     if response.status_code == 429:
         return False, "Google Places 配額已用盡（429）"
     return False, f"Google Places 回應異常（HTTP {response.status_code}）"
+
+
+def _denial_details(response: httpx.Response) -> tuple[str, str]:
+    """Pull the machine-readable reason and project number out of a 403 body."""
+    try:
+        details = response.json()["error"]["details"]
+    except (ValueError, KeyError, TypeError):
+        return "", ""
+    for detail in details:
+        if not isinstance(detail, dict) or "reason" not in detail:
+            continue
+        consumer = (detail.get("metadata") or {}).get("consumer", "")
+        return detail["reason"], consumer.split("/")[-1] if consumer else ""
+    return "", ""
 
 
 async def lookup_nominatim(query: str) -> dict:

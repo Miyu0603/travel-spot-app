@@ -21,6 +21,7 @@ import httpx  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.services import geo_service, media_service  # noqa: E402
+from app.services.geo_service import _denial_details  # noqa: E402
 from app.services.ai_extractor import _user_content  # noqa: E402
 from app.services.geo_service import merge_geo_into_spot  # noqa: E402
 from app.services.media_service import to_data_url  # noqa: E402
@@ -103,6 +104,63 @@ def test_places_empty_result_is_handled():
     settings.google_maps_api_key = "fake-key"
     geo_service.httpx.AsyncClient = fake_transport(200, {"places": []})
     assert asyncio.run(geo_service.lookup_google_place("不存在的地方")) == {}
+
+
+def _denial_body(reason: str) -> dict:
+    return {
+        "error": {
+            "code": 403,
+            "status": "PERMISSION_DENIED",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": reason,
+                    "metadata": {"consumer": "projects/118443993735"},
+                }
+            ],
+        }
+    }
+
+
+def test_denial_details_extracts_reason_and_project():
+    response = httpx.Response(
+        403, json=_denial_body("API_KEY_SERVICE_BLOCKED"),
+        request=httpx.Request("POST", "https://x"),
+    )
+    assert _denial_details(response) == ("API_KEY_SERVICE_BLOCKED", "118443993735")
+
+
+def test_denial_details_survives_an_unparseable_body():
+    response = httpx.Response(403, text="not json", request=httpx.Request("POST", "https://x"))
+    assert _denial_details(response) == ("", "")
+
+
+def test_blocked_key_and_disabled_service_give_different_instructions():
+    """Both are 403 but need different fixes; a generic message sends the user
+    to the wrong screen."""
+    settings.google_maps_api_key = "fake-key"
+
+    geo_service.httpx.AsyncClient = fake_transport(403, _denial_body("API_KEY_SERVICE_BLOCKED"))
+    ok, blocked = asyncio.run(geo_service.probe_places_access())
+    assert not ok and "限制清單" in blocked and "118443993735" in blocked
+
+    geo_service.httpx.AsyncClient = fake_transport(403, _denial_body("SERVICE_DISABLED"))
+    ok, disabled = asyncio.run(geo_service.probe_places_access())
+    assert not ok and "尚未啟用" in disabled
+    assert blocked != disabled
+
+
+def test_probe_reports_success_when_places_works():
+    settings.google_maps_api_key = "fake-key"
+    geo_service.httpx.AsyncClient = fake_transport(200, PLACES_HIT)
+    ok, message = asyncio.run(geo_service.probe_places_access())
+    assert ok and "可正常使用" in message
+
+
+def test_probe_without_a_key_says_so():
+    settings.google_maps_api_key = ""
+    ok, message = asyncio.run(geo_service.probe_places_access())
+    assert not ok and "GOOGLE_MAPS_API_KEY" in message
 
 
 # --- merge policy: who is allowed to overwrite what ---
