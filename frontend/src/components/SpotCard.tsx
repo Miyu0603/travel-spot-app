@@ -2,15 +2,20 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Spot, updateSpot, deleteSpot } from "@/lib/api";
+import { formatBusinessHours } from "@/lib/businessHours";
 
 export default function SpotCard({
     spot,
     onUpdate,
     onDelete,
+    selected = false,
+    onSelectChange,
 }: {
     spot: Spot;
     onUpdate?: () => void;
     onDelete?: () => void;
+    selected?: boolean;
+    onSelectChange?: (checked: boolean) => void;
 }) {
     const [editing, setEditing] = useState(false);
     const [deleting, setDeleting] = useState(false);
@@ -131,10 +136,21 @@ export default function SpotCard({
     return (
         <div
             ref={cardRef}
-            className={`bg-card-bg border border-card-border p-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] transition-all duration-500 hover:shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
+            className={`bg-card-bg border p-5 shadow-[0_4px_20px_rgba(0,0,0,0.03)] transition-all duration-500 hover:shadow-[0_10px_30px_rgba(0,0,0,0.08)] ${selected ? "border-mag-gold" : "border-card-border"} ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
         >
             <div className="mb-3 flex items-start justify-between gap-2">
-                <h3 className="font-noto text-base font-bold text-mag-black leading-snug">{spot.title}</h3>
+                <div className="flex items-start gap-2 min-w-0">
+                    {onSelectChange && (
+                        <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={(e) => onSelectChange(e.target.checked)}
+                            aria-label={`選取 ${spot.title}`}
+                            className="mt-1 h-4 w-4 shrink-0 accent-mag-gold cursor-pointer"
+                        />
+                    )}
+                    <h3 className="font-noto text-base font-bold text-mag-black leading-snug">{spot.title}</h3>
+                </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                     <button
                         onClick={() => setEditing(true)}
@@ -183,7 +199,7 @@ export default function SpotCard({
                     <div className="flex items-start gap-2">
                         <span className="text-mag-gold font-black text-[10px] uppercase tracking-wider w-10 shrink-0 pt-0.5">時間</span>
                         <span className="min-w-0">
-                            <span className="font-bold text-mag-black">{spot.business_hours}</span>
+                            <span className="font-bold text-mag-black">{formatBusinessHours(spot.business_hours)}</span>
                             {/* Hours are partly filled in by the LLM from memory, so they can be
                                 stale. Rendered here rather than stored, so the edit form keeps the
                                 raw value and every spot gets the caveat, not just newly imported ones. */}

@@ -13,6 +13,7 @@ def list_spots(
     region: RegionEnum | None = None,
     continent: ContinentEnum | None = None,
     country: str | None = None,
+    city: str | None = None,
     tag: str | None = None,
     search: str | None = None,
     skip: int = 0,
@@ -28,6 +29,9 @@ def list_spots(
         query = query.filter(Spot.continent == continent)
     if country:
         query = query.filter(Spot.country.ilike(f"%{country}%"))
+    if city:
+        # Exact match: 「東京」must not also pull in a hypothetical 「東京都下」.
+        query = query.filter(Spot.city == city)
     if tag:
         query = query.join(Spot.tags).filter(Tag.name == tag)
     if search:

@@ -107,12 +107,14 @@ export interface ScrapeResult {
 export async function fetchSpots(params?: {
     region?: string;
     country?: string;
+    city?: string;
     search?: string;
     tag?: string;
 }): Promise<Spot[]> {
     const query = new URLSearchParams();
     if (params?.region) query.set("region", params.region);
     if (params?.country) query.set("country", params.country);
+    if (params?.city) query.set("city", params.city);
     if (params?.search) query.set("search", params.search);
     if (params?.tag) query.set("tag", params.tag);
 

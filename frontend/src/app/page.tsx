@@ -5,12 +5,17 @@ import UrlImporter from "@/components/UrlImporter";
 import SpotCard from "@/components/SpotCard";
 import RegionFilter from "@/components/RegionFilter";
 import ThemeToggle from "@/components/ThemeToggle";
-import { fetchSpots, Spot, ScrapeResult, getApiKey, setApiKey, ApiError } from "@/lib/api";
+import { fetchSpots, deleteSpot, Spot, ScrapeResult, getApiKey, setApiKey, ApiError } from "@/lib/api";
 
 export default function Home() {
   const [spots, setSpots] = useState<Spot[]>([]);
   const [region, setRegion] = useState("");
   const [country, setCountry] = useState("");
+  const [city, setCity] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkError, setBulkError] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [authed, setAuthed] = useState(false);
@@ -49,6 +54,7 @@ export default function Home() {
       const data = await fetchSpots({
         region: region || undefined,
         country: country || undefined,
+        city: city || undefined,
         search: search || undefined,
       });
       setSpots(data);
@@ -67,7 +73,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [region, country, search]);
+  }, [region, country, city, search]);
 
   // Refetching when the filters change is exactly "subscribe to an external
   // system"; the synchronous setState the rule objects to is setLoading, and a
@@ -77,6 +83,41 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (authed) loadSpots();
   }, [authed, loadSpots]);
+
+  const toggleSelected = (id: number, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    setConfirmingDelete(false);
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setConfirmingDelete(false);
+    setBulkError("");
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    setBulkError("");
+    const ids = [...selectedIds];
+    const results = await Promise.allSettled(ids.map((id) => deleteSpot(id)));
+    const failed = results.filter((r) => r.status === "rejected").length;
+
+    // Drop only what actually went; a partial failure must not look like a
+    // clean sweep, or the user re-selects and deletes something twice.
+    const deletedIds = new Set(
+      ids.filter((_, index) => results[index].status === "fulfilled")
+    );
+    setSpots((prev) => prev.filter((s) => !deletedIds.has(s.id)));
+    setSelectedIds(new Set());
+    setConfirmingDelete(false);
+    setBulkDeleting(false);
+    if (failed) setBulkError(`有 ${failed} 個景點刪除失敗，請稍後再試`);
+  };
 
   const handleImportComplete = (result: ScrapeResult) => {
     setLastResult(result);
@@ -169,7 +210,14 @@ export default function Home() {
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex-1 min-w-0">
-            <RegionFilter value={region} onChange={setRegion} country={country} onCountryChange={setCountry} />
+            <RegionFilter
+              value={region}
+              onChange={setRegion}
+              country={country}
+              onCountryChange={setCountry}
+              city={city}
+              onCityChange={setCity}
+            />
           </div>
           <input
             type="text"
@@ -205,10 +253,55 @@ export default function Home() {
       ) : (
         <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 transition-opacity duration-200 ${loading ? "opacity-50" : "opacity-100"}`}>
           {spots.map((spot) => (
-            <SpotCard key={spot.id} spot={spot} onUpdate={loadSpots} onDelete={() => {
-              setSpots((prev) => prev.filter((s) => s.id !== spot.id));
-            }} />
+            <SpotCard
+              key={spot.id}
+              spot={spot}
+              onUpdate={loadSpots}
+              selected={selectedIds.has(spot.id)}
+              onSelectChange={(checked) => toggleSelected(spot.id, checked)}
+              onDelete={() => {
+                setSpots((prev) => prev.filter((s) => s.id !== spot.id));
+                toggleSelected(spot.id, false);
+              }}
+            />
           ))}
+        </div>
+      )}
+      {selectedIds.size > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-card-bg/95 backdrop-blur px-4 py-3 shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3">
+            <span className="text-sm font-black text-mag-black">
+              已選 {selectedIds.size} 個景點
+            </span>
+            {bulkError && (
+              <span className="text-xs font-bold text-mag-red">{bulkError}</span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={clearSelection}
+                disabled={bulkDeleting}
+                className="px-4 py-2 text-xs font-black tracking-wider uppercase text-mag-gray hover:text-mag-black disabled:opacity-40"
+              >
+                取消選取
+              </button>
+              {confirmingDelete ? (
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                  className="px-5 py-2 bg-mag-red text-white text-xs font-black tracking-wider uppercase active:scale-[0.97] transition-all disabled:opacity-40"
+                >
+                  {bulkDeleting ? "刪除中..." : `確定刪除 ${selectedIds.size} 個？`}
+                </button>
+              ) : (
+                <button
+                  onClick={() => setConfirmingDelete(true)}
+                  className="px-5 py-2 bg-mag-black text-mag-paper text-xs font-black tracking-wider uppercase active:scale-[0.97] transition-all"
+                >
+                  刪除
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </main>
