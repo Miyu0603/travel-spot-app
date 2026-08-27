@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -15,7 +16,11 @@ from app.services.ai_extractor import ExtractionError, extract_spots_from_text
 from app.services.geo_service import enrich_spots
 from app.services.media_service import fetch_images_as_data_urls, frames_to_data_urls
 from app.services.rate_limit import enforce_extraction_limit
-from app.services.video_service import FrameExtractionError, extract_frames
+from app.services.video_service import (
+    FrameExtractionError,
+    extract_frames,
+    has_audio_stream,
+)
 from app.services.whisper_service import (
     TranscriptionError,
     download_video,
@@ -81,7 +86,7 @@ async def scrape_and_extract(source_in: SourceCreate, db: Session = Depends(get_
 
     # Step 3 & 4: AI extraction + geo enrichment
     try:
-        spots_data, discarded = await _process_text(text, source, db, images + frames)
+        spots_data, discarded = await _process_text(text, source, db, images, frames)
     except ExtractionError as exc:
         return _extraction_failed(source, exc, db)
 
@@ -158,12 +163,17 @@ async def _harvest_video(video_url: str | None, text: str) -> tuple[str, list[st
         except TranscriptionError as exc:
             return text, [], [f"影片處理失敗：{exc}"]
 
-        try:
-            transcript = await transcribe_file(tmp_path)
-            if transcript.strip():
-                text = f"{text}\n\n[影片逐字稿]\n{transcript}"
-        except TranscriptionError as exc:
-            warnings.append(f"影片轉錄失敗：{exc}")
+        if not await asyncio.to_thread(has_audio_stream, tmp_path):
+            # Silent slideshow: nothing to transcribe, and calling Whisper anyway
+            # costs money and returns a 400 that reads like a real failure.
+            pass
+        else:
+            try:
+                transcript = await transcribe_file(tmp_path)
+                if transcript.strip():
+                    text = f"{text}\n\n[影片逐字稿]\n{transcript}"
+            except TranscriptionError as exc:
+                warnings.append(f"影片轉錄失敗：{exc}")
 
         try:
             frames = frames_to_data_urls(await extract_frames(tmp_path))
@@ -177,14 +187,18 @@ async def _harvest_video(video_url: str | None, text: str) -> tuple[str, list[st
 
 
 async def _process_text(
-    text: str, source: Source, db: Session, images: list[str] | None = None
+    text: str,
+    source: Source,
+    db: Session,
+    images: list[str] | None = None,
+    frames: list[str] | None = None,
 ) -> tuple[list[dict], int]:
     """Extract spots from text using AI, enrich with geo, and save to DB.
 
     Returns (saved_spots, discarded_count). Propagates ExtractionError so the
     caller can report a real failure instead of an empty result.
     """
-    raw_spots, discarded = await extract_spots_from_text(text, images)
+    raw_spots, discarded = await extract_spots_from_text(text, images, frames)
     if not raw_spots:
         return [], discarded
 

@@ -46,6 +46,21 @@ def probe_duration(ffmpeg: str, video_path: str) -> float:
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
+def has_audio_stream(video_path: str) -> bool:
+    """Whether the file carries any audio.
+
+    Caption-card videos are commonly silent, and Whisper rejects a file with no
+    audio with a bare HTTP 400 — a paid request that could never succeed, plus a
+    failure warning that makes a working extraction look broken.
+    """
+    try:
+        ffmpeg = _ffmpeg_binary()
+    except FrameExtractionError:
+        return True  # cannot tell; let Whisper decide rather than skip wrongly
+    result = subprocess.run([ffmpeg, "-i", video_path], capture_output=True, timeout=60)
+    return "Audio:" in result.stderr.decode("utf-8", "replace")
+
+
 def _extract_frames_sync(video_path: str, frame_count: int) -> list[str]:
     """Frames as base64 JPEG, one from the middle of each equal slice.
 

@@ -28,6 +28,28 @@ def to_data_url(raw: bytes, content_type: str) -> str | None:
     return f"data:image/{kind};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
+def sample_evenly(urls: list[str], limit: int) -> list[str]:
+    """Spread the selection across the whole carousel instead of taking the first N.
+
+    Travel accounts put one spot per slide and the information cards are often
+    late in the sequence — taking the first N read slides 1-4 of a 10-slide post
+    and missed every card after them.
+    """
+    if limit <= 0:
+        return []
+    if len(urls) <= limit:
+        return urls
+    if limit == 1:
+        return [urls[0]]
+    step = (len(urls) - 1) / (limit - 1)
+    picked: list[str] = []
+    for index in range(limit):
+        candidate = urls[round(index * step)]
+        if candidate not in picked:
+            picked.append(candidate)
+    return picked
+
+
 async def fetch_images_as_data_urls(
     urls: list[str], limit: int
 ) -> tuple[list[str], int]:
@@ -43,8 +65,11 @@ async def fetch_images_as_data_urls(
 
     collected: list[str] = []
     failed = 0
+    candidates = sample_evenly(
+        [u for u in urls if isinstance(u, str) and u.startswith("http")], limit
+    )
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        for url in urls:
+        for url in candidates:
             if len(collected) >= limit:
                 break
             if not isinstance(url, str) or not url.startswith("http"):

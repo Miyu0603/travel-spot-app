@@ -52,7 +52,7 @@ class ExtractionError(Exception):
     """The extraction could not be completed — distinct from 'found no spots'."""
 
 
-def _user_content(text: str, images: list[str]) -> list[dict]:
+def _user_content(text: str, images: list[str], frames: list[str] | None = None) -> list[dict]:
     """Build the multimodal user message.
 
     Images are inlined as data URLs rather than passed by link: Instagram and
@@ -60,7 +60,11 @@ def _user_content(text: str, images: list[str]) -> list[dict]:
     from OpenAI's side.
     """
     content: list[dict] = [{"type": "text", "text": f"<post>\n{text}\n</post>"}]
-    for image in images[: settings.max_post_images]:
+    # Capped separately: post slides and video frames compete for nothing, and a
+    # single combined cap let three video frames crowd out half a carousel.
+    selected = list(images[: settings.max_post_images])
+    selected += list((frames or [])[: settings.video_frame_count])
+    for image in selected:
         content.append(
             {
                 "type": "image_url",
@@ -71,7 +75,7 @@ def _user_content(text: str, images: list[str]) -> list[dict]:
 
 
 async def extract_spots_from_text(
-    text: str, images: list[str] | None = None
+    text: str, images: list[str] | None = None, frames: list[str] | None = None
 ) -> tuple[list[dict], int]:
     """Extract spots from a post's text and any accompanying imagery.
 
@@ -86,7 +90,8 @@ async def extract_spots_from_text(
         raise ExtractionError("尚未設定 OpenAI API key，無法進行萃取")
 
     images = images or []
-    if not text.strip() and not images:
+    frames = frames or []
+    if not text.strip() and not images and not frames:
         return [], 0
 
     try:
@@ -98,7 +103,7 @@ async def extract_spots_from_text(
                     "model": "gpt-4o-mini",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": _user_content(text, images)},
+                        {"role": "user", "content": _user_content(text, images, frames)},
                     ],
                     "temperature": 0.1,
                     "max_tokens": MAX_COMPLETION_TOKENS,

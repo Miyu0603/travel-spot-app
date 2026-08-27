@@ -24,8 +24,12 @@ from app.services import geo_service, media_service  # noqa: E402
 from app.services.geo_service import _denial_details  # noqa: E402
 from app.services.ai_extractor import _user_content  # noqa: E402
 from app.services.geo_service import merge_geo_into_spot  # noqa: E402
-from app.services.media_service import to_data_url  # noqa: E402
-from app.services.video_service import extract_frames, probe_duration  # noqa: E402
+from app.services.media_service import sample_evenly, to_data_url  # noqa: E402
+from app.services.video_service import (  # noqa: E402
+    extract_frames,
+    has_audio_stream,
+    probe_duration,
+)
 from app.services.whisper_service import (  # noqa: E402
     MAX_UPLOAD_BYTES,
     TranscriptionError,
@@ -295,6 +299,27 @@ def test_empty_post_yields_nothing():
     assert _collect_media({}) == ([], None)
 
 
+# --- carousel sampling: the bug that lost the information cards ---
+
+def test_a_full_carousel_is_sent_whole():
+    assert sample_evenly([f"s{i}" for i in range(10)], 10) == [f"s{i}" for i in range(10)]
+
+
+def test_oversized_carousel_is_sampled_across_not_truncated():
+    """Taking the first N read slides 1-4 of a 10-slide post and missed the
+    information card sitting at slide 6."""
+    picked = sample_evenly([f"s{i}" for i in range(20)], 4)
+    assert picked[0] == "s0" and picked[-1] == "s19"
+    assert picked != ["s0", "s1", "s2", "s3"]
+
+
+def test_sampling_handles_degenerate_limits():
+    assert sample_evenly(["a", "b", "c"], 10) == ["a", "b", "c"]
+    assert sample_evenly(["a", "b", "c"], 1) == ["a"]
+    assert sample_evenly(["a", "b", "c"], 0) == []
+    assert sample_evenly([], 5) == []
+
+
 # --- the multimodal message ---
 
 def test_text_only_post_sends_one_text_part():
@@ -314,7 +339,51 @@ def test_image_count_is_capped_to_control_cost():
     settings.max_post_images = 2
     content = _user_content("貼文", [f"data:image/jpeg;base64,{i}" for i in range(10)])
     assert sum(1 for part in content if part["type"] == "image_url") == 2
-    settings.max_post_images = 4
+    settings.max_post_images = 10
+
+
+def test_frames_have_their_own_cap_and_do_not_crowd_out_slides():
+    """A single shared cap let three video frames displace half a carousel."""
+    settings.max_post_images = 10
+    settings.video_frame_count = 3
+    content = _user_content(
+        "貼文",
+        [f"data:image/jpeg;base64,slide{i}" for i in range(10)],
+        [f"data:image/jpeg;base64,frame{i}" for i in range(5)],
+    )
+    assert sum(1 for part in content if part["type"] == "image_url") == 13
+
+
+def test_silent_video_is_detected_so_whisper_is_not_called():
+    """Whisper 400s on a file with no audio — a paid request that cannot succeed
+    and a warning that makes a working extraction look broken."""
+    import imageio_ffmpeg
+
+    silent = tempfile.mktemp(suffix=".mp4")
+    subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(), "-y",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=3",
+            "-pix_fmt", "yuv420p", silent,
+        ],
+        capture_output=True, check=True,
+    )
+    noisy = tempfile.mktemp(suffix=".mp4")
+    subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(), "-y",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=3",
+            "-f", "lavfi", "-i", "sine=frequency=440", "-shortest",
+            "-pix_fmt", "yuv420p", noisy,
+        ],
+        capture_output=True, check=True,
+    )
+    try:
+        assert has_audio_stream(silent) is False
+        assert has_audio_stream(noisy) is True
+    finally:
+        os.unlink(silent)
+        os.unlink(noisy)
 
 
 # --- whisper guards ---

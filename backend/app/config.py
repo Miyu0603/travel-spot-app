@@ -27,7 +27,10 @@ class Settings(BaseSettings):
 
     # How many post images and video frames to show the vision model.
     # Each one adds tokens to every extraction; 0 disables that source.
-    max_post_images: int = 4
+    # An Instagram carousel holds up to 10 slides and the information cards are
+    # often near the end, so the default covers a whole carousel rather than
+    # sampling the opening slides.
+    max_post_images: int = 10
     video_frame_count: int = 3
 
     # Every key present in .env must be declared above: pydantic-settings rejects
