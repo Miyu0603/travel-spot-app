@@ -1,56 +1,215 @@
 """
-Geo Service: Enriches spot data with Google Maps URLs
-and coordinates via free Nominatim geocoding.
+Geo Service: fills in authoritative location data for a spot.
+
+Google Places is the primary source — it knows the real address, opening hours
+and place link, none of which the LLM can be trusted to remember. Nominatim
+stays as a no-API-key fallback that supplies coordinates only; it must never be
+allowed to overwrite address or hours, because it has neither.
 """
 
+import asyncio
 import urllib.parse
 
 import httpx
 
+from app.config import settings
 
-async def enrich_spot_with_geo(spot_name: str, address: str = "") -> dict:
-    """Enrich a spot with a Google Maps search URL and coordinates from Nominatim."""
-    query = f"{spot_name} {address}".strip()
-    if not query:
+PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+
+# Only the fields we store, so we are not billed for data we discard.
+PLACES_FIELD_MASK = ",".join(
+    (
+        "places.formattedAddress",
+        "places.location",
+        "places.googleMapsUri",
+        "places.regularOpeningHours.weekdayDescriptions",
+        "places.nationalPhoneNumber",
+        "places.websiteUri",
+    )
+)
+
+# Nominatim's usage policy allows at most one request per second.
+NOMINATIM_MIN_INTERVAL = 1.0
+
+
+def _search_url(query: str) -> str:
+    return f"https://www.google.com/maps/search/{urllib.parse.quote(query)}"
+
+
+async def lookup_google_place(query: str) -> dict:
+    """Look a spot up in Google Places. Returns {} when unavailable."""
+    if not settings.google_maps_api_key or not query:
         return {}
 
-    # Generate Google Maps search URL (no API key needed)
-    maps_url = f"https://www.google.com/maps/search/{urllib.parse.quote(query)}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                PLACES_SEARCH_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": settings.google_maps_api_key,
+                    "X-Goog-FieldMask": PLACES_FIELD_MASK,
+                },
+                json={"textQuery": query, "languageCode": "zh-TW", "maxResultCount": 1},
+            )
+    except httpx.HTTPError:
+        return {}
 
-    result = {
-        "google_maps_url": maps_url,
-    }
+    if response.status_code != 200:
+        # 403 usually means "Places API (New)" is not enabled on the project.
+        # Falling back keeps extraction working instead of failing outright.
+        return {}
 
-    # Try free Nominatim geocoding for coordinates
+    try:
+        places = response.json().get("places") or []
+    except ValueError:
+        return {}
+    if not places:
+        return {}
+
+    place = places[0]
+    found: dict = {"geo_source": "google_places"}
+
+    if place.get("formattedAddress"):
+        found["address"] = place["formattedAddress"]
+
+    location = place.get("location") or {}
+    if "latitude" in location and "longitude" in location:
+        found["latitude"] = float(location["latitude"])
+        found["longitude"] = float(location["longitude"])
+
+    if place.get("googleMapsUri"):
+        found["google_maps_url"] = place["googleMapsUri"]
+
+    weekdays = (place.get("regularOpeningHours") or {}).get("weekdayDescriptions") or []
+    if weekdays:
+        found["business_hours"] = "；".join(weekdays)
+
+    extras = []
+    if place.get("nationalPhoneNumber"):
+        extras.append(f"電話：{place['nationalPhoneNumber']}")
+    if place.get("websiteUri"):
+        extras.append(f"官網：{place['websiteUri']}")
+    if extras:
+        found["place_extras"] = "；".join(extras)
+
+    return found
+
+
+async def probe_places_access() -> tuple[bool, str]:
+    """One diagnostic call, so a misconfigured project reports itself.
+
+    lookup_google_place() deliberately swallows failures to keep extraction
+    running, which makes "API not enabled" indistinguishable from "no such
+    place". Tools that need the difference ask here first.
+    """
+    if not settings.google_maps_api_key:
+        return False, "未設定 GOOGLE_MAPS_API_KEY"
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                PLACES_SEARCH_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": settings.google_maps_api_key,
+                    "X-Goog-FieldMask": "places.formattedAddress",
+                },
+                json={"textQuery": "台北101", "languageCode": "zh-TW", "maxResultCount": 1},
+            )
+    except httpx.HTTPError as exc:
+        return False, f"無法連線到 Google Places：{exc}"
+
+    if response.status_code == 200:
+        return True, "Google Places 可正常使用"
+    if response.status_code == 403:
+        return False, (
+            "Google 拒絕存取（403）。請到 Google Cloud Console 啟用 "
+            "「Places API (New)」，並確認 API key 沒有被限制。"
+        )
+    if response.status_code == 400:
+        return False, "請求被拒（400），API key 可能無效"
+    if response.status_code == 429:
+        return False, "Google Places 配額已用盡（429）"
+    return False, f"Google Places 回應異常（HTTP {response.status_code}）"
+
+
+async def lookup_nominatim(query: str) -> dict:
+    """Free OpenStreetMap geocoding. Coordinates only — it has no hours."""
+    if not query:
+        return {}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(
                 "https://nominatim.openstreetmap.org/search",
-                params={
-                    "q": query,
-                    "format": "json",
-                    "limit": 1,
-                    "accept-language": "zh-TW",
-                },
+                params={"q": query, "format": "json", "limit": 1, "accept-language": "zh-TW"},
                 headers={"User-Agent": "TravelSpotApp/1.0"},
             )
-            if response.status_code == 200:
-                data = response.json()
-                if data:
-                    result["latitude"] = float(data[0]["lat"])
-                    result["longitude"] = float(data[0]["lon"])
+        if response.status_code != 200:
+            return {}
+        data = response.json()
+        if not data:
+            return {}
+        return {
+            "geo_source": "nominatim",
+            "latitude": float(data[0]["lat"]),
+            "longitude": float(data[0]["lon"]),
+        }
     except Exception:
-        pass  # Coordinates are optional; Maps URL is still useful
+        # Coordinates are optional; the Maps search URL is still useful.
+        return {}
 
-    return result
+
+async def enrich_spot_with_geo(spot_name: str, address: str = "") -> dict:
+    """Best available location data for one spot."""
+    query = f"{spot_name} {address}".strip()
+    if not query:
+        return {}
+
+    found = await lookup_google_place(query)
+    if found:
+        found.setdefault("google_maps_url", _search_url(query))
+        return found
+
+    fallback = await lookup_nominatim(query)
+    fallback["google_maps_url"] = _search_url(query)
+    return fallback
+
+
+def merge_geo_into_spot(spot: dict, geo: dict) -> dict:
+    """Apply lookup results, letting the better source win per field.
+
+    Google Places outranks whatever the LLM guessed for address and hours.
+    Nominatim never touches those — it only knows coordinates — so its results
+    must not be allowed to blank out the LLM's guesses.
+    """
+    if not geo:
+        return spot
+
+    authoritative = geo.get("geo_source") == "google_places"
+
+    for key in ("latitude", "longitude", "google_maps_url"):
+        if geo.get(key) not in (None, ""):
+            spot[key] = geo[key]
+
+    if authoritative:
+        for key in ("address", "business_hours"):
+            if geo.get(key):
+                spot[key] = geo[key]
+        extras = geo.get("place_extras")
+        if extras and extras not in (spot.get("notes") or ""):
+            spot["notes"] = f"{spot['notes']}；{extras}" if spot.get("notes") else extras
+
+    return spot
 
 
 async def enrich_spots(spots: list[dict]) -> list[dict]:
     """Enrich a list of spots with geo data."""
     enriched = []
-    for spot in spots:
+    for index, spot in enumerate(spots):
+        if index and not settings.google_maps_api_key:
+            # Only the Nominatim path needs throttling; Places has no such rule.
+            await asyncio.sleep(NOMINATIM_MIN_INTERVAL)
         geo = await enrich_spot_with_geo(spot.get("title", ""), spot.get("address", ""))
-        if geo:
-            spot.update({k: v for k, v in geo.items() if v})
-        enriched.append(spot)
+        enriched.append(merge_geo_into_spot(spot, geo))
     return enriched
